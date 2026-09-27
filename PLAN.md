@@ -1,16 +1,39 @@
 # Mainframe Frontier — Repo Plan
 
-> A working mainframe you can clone: a realistic COBOL workload running on a real
-> (or emulated) mainframe substrate, wrapped in modern tooling for visibility,
-> interfacing, development, monitoring, processing, and reliability.
+> **Intent:** show modern engineering applied to mainframe COBOL. The COBOL
+> is kept as it is, and first-class tooling for processing, interfacing,
+> development, visibility, monitoring and reliability is built around a
+> workload realistic enough to prove it. The workload runs without a
+> mainframe today, and later against emulated MVS or real z/OS through the
+> same interface.
+>
+> This file is the long-range plan. For what exists now and why, see
+> [README.md](README.md#why-this-project-exists).
 
-## 1. Why this repo stands out
+## 1. Intent and principles
 
 Most "COBOL demo" repos are either a single `HELLO.cbl` or a slide-deck-style
-modernization pitch. This one goes further: a **complete, runnable system**
-that behaves like a production mainframe shop, including the parts that usually
+modernization pitch. This one is a **complete, runnable system** that
+behaves like a production mainframe shop, including the parts that usually
 go unshown: nightly batch windows, abends, restarts, copybook drift, spool
 archaeology, SLAs. Each pillar gets modern tooling.
+
+Principles that guide every phase:
+
+1. **Improve in place, don't rewrite.** The COBOL stays. The value is in
+   the tooling around it.
+2. **Realistic over impressive.** The data has packed decimals, bad
+   records, month-ends and reconciliations, because tooling proven on a
+   toy proves nothing.
+3. **Faithful and honest.** Emulate z/OS semantics closely, and document
+   precisely what is emulated, real, or missing.
+4. **Verify against independent references.** COBOL's own control totals,
+   glibc `iconv`, and bytes captured from the real compiler.
+5. **Substrate-independent.** Everything above the `MainframeAdapter` must
+   work unchanged against the local runner, Hercules/MVS, or z/OS.
+6. **Every phase ships something demoable.**
+
+Target state for each pillar:
 
 | Pillar       | What it shows                                                                 |
 |--------------|-------------------------------------------------------------------------------|

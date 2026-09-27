@@ -3,11 +3,11 @@
 [![ci](https://github.com/roberjo/mainframe-frontier/actions/workflows/ci.yml/badge.svg)](https://github.com/roberjo/mainframe-frontier/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**A working mainframe shop you can clone.** First Frontier Bank runs a real
-COBOL nightly batch cycle, with JCL job streams, generation data groups,
-packed-decimal master files, a general-ledger reconciliation, and customer
-statements. A JES-style job runner written in Rust executes it and writes
-the same job logs, condition codes and abend codes you'd see on z/OS.
+**A showcase of modern engineering applied to mainframe COBOL.** A
+realistic COBOL batch system runs here, in a container, without a
+mainframe. Around it, the project builds the tooling that production
+mainframe shops need and rarely have: visibility, interfacing, a modern
+development workflow, monitoring, and reliability engineering.
 
 ```
 $ make demo
@@ -18,11 +18,65 @@ JOB00002  NIGHTLY  CC 0004     2026-09-27 15:32:17     8     2.75     12.22
 JOB00003  NIGHTLY  CC 0004     2026-09-27 15:32:30     8     2.62     11.61
 ```
 
-The goal is a showcase of modern tooling around a realistic COBOL workload:
-visibility, interfacing, development, monitoring, processing and
-reliability. The batch shop is the foundation; later phases add a web
-Control Room, OpenTelemetry monitoring, chaos and restart tooling, a
-copybook-driven API gateway, and an MCP server so AI agents can operate it.
+## Why this project exists
+
+A great deal of critical processing (payments, deposits, claims) still
+runs as COBOL batch on mainframes. The code is rarely the hard part. The
+hard part is everything around it:
+- job streams nobody can see into
+- packed-decimal files nobody outside the platform can read
+- copybooks that silently drift from the data
+- abends found at 3 a.m.
+- a development loop that stayed in the 1990s
+
+Most public examples are either a lone `HELLO.cbl` or a modernization
+slide deck that proposes rewriting everything.
+
+Mainframe Frontier takes a different position: **keep the COBOL, and
+surround it with first-class tooling.** It does this with a workload real
+enough that the tooling has something honest to prove itself on.
+
+- **A real workload, not a toy.** First Frontier Bank's nightly cycle posts
+  50,000 transactions against 10,000 accounts:
+  - packed-decimal master files and generation data groups
+  - interest accrual and month-end crediting
+  - a general-ledger reconciliation that must balance to the cent
+  - customer statements
+- **No mainframe required.** GnuCOBOL and a JES-style job runner written in
+  Rust reproduce the z/OS behavior that matters: JCL, condition codes,
+  dataset dispositions, spool output, and abend codes. The whole shop runs
+  from `make demo`.
+- **Mainframe-faithful, and honest about it.** The runner uses real z/OS
+  message IDs and semantics so mainframe people can read its output. The
+  docs say exactly what is emulated, what is real, and what is missing.
+- **Verifiable.** The tools are checked against independent references:
+  - decoded data is summed and compared with the COBOL's own reconciliation
+  - EBCDIC output is compared byte-for-byte with glibc `iconv`
+  - CI runs the whole batch and validates every output field
+- **Portable upward.** Everything talks to the shop through one
+  `MainframeAdapter` interface, so the same tools can later point at an
+  emulated MVS (Hercules) or a real z/OS system.
+
+### The six goals, and where each stands
+
+| Goal | What it means here | Built so far | Planned |
+|------|--------------------|--------------|---------|
+| **Processing** | Real COBOL batch with mainframe data semantics | 8-step nightly JCL cycle; GDGs, `&&TEMP`, `COND`; COMP-3/zoned/binary; SORT, IDCAMS, IEBGENER; abend mapping (S0C7, S013, S806, ...) | Online CICS-style transactions, VSAM-style indexed files |
+| **Interfacing** | Get data in and out of the mainframe world safely | Copybook → JSON and JSON Schema; field-aware EBCDIC export/import; host-file decoding | REST/gRPC gateway generated from copybooks, change-data-capture events, an MCP server for AI agents |
+| **Development** | A modern inner loop for COBOL | Dev container, one-command build, CI with a full batch run, copybook layout maps | COBOL unit tests, copybook impact analysis, lineage graph |
+| **Visibility** | See what the shop is doing and why | Spool, job and dataset views; decoded record views; structured `job.json` | Web Control Room: live job graph, spool viewer, record decoder, web 3270 |
+| **Monitoring** | Measure batch like a service | Per-step CPU, elapsed time and record counts | OpenTelemetry spans, SMF-style records, Grafana dashboards, batch-window SLOs |
+| **Reliability** | Prevent, detect and recover from failure | Step flushing and cleanup on abend, reconciliation gate, `ds check` data validation in CI | Checkpoint/restart, chaos (abend injection), runbooks, AI abend triage |
+
+### Who it is for
+
+- **Mainframe engineers** who want to see modern practices (containers,
+  CI, observability, APIs) applied to the platform they know.
+- **Engineers from outside the mainframe world** who want to understand
+  COBOL batch, JCL and packed decimal by running and breaking a real shop.
+- **Anyone evaluating modernization approaches** who wants a working
+  reference for improving mainframe systems in place rather than rewriting
+  them.
 
 | Who you are | Start here |
 |-------------|------------|

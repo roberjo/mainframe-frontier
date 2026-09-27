@@ -1,5 +1,23 @@
 # Contributing
 
+## What belongs here
+
+The project's intent is modern tooling built *around* mainframe COBOL,
+proven on a realistic workload (see
+[Why this project exists](README.md#why-this-project-exists)). Good
+contributions:
+
+- **Make the workload more realistic.** More mainframe semantics, harder
+  data, new failure modes.
+- **Add tooling for one of the six goals**: processing, interfacing,
+  development, visibility, monitoring, reliability.
+- **Stay faithful to z/OS behavior**, and document where they don't.
+- **Can be verified** against something independent, not just against
+  themselves.
+
+Out of scope: rewriting the COBOL in another language, and toy examples
+that don't run inside the shop.
+
 ## Setup
 
 You need Docker. Any engine works: Docker Desktop, Colima or OrbStack.

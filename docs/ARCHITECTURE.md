@@ -1,7 +1,13 @@
 # Architecture
 
 How Mainframe Frontier works today (Phases 0-2), and where the later phases
-plug in. For the long-range plan, see [PLAN.md](../PLAN.md).
+plug in. For why the project exists, see the
+[README](../README.md#why-this-project-exists); for the long-range plan,
+see [PLAN.md](../PLAN.md).
+
+In short: the COBOL workload is the fixed point, and every component here
+exists to make it visible, interoperable, observable or safer to change,
+without rewriting it.
 
 ## The big picture
 
