@@ -1,6 +1,6 @@
 # Architecture
 
-How Mainframe Frontier works today (Phases 0-1), and where the later phases
+How Mainframe Frontier works today (Phases 0-2), and where the later phases
 plug in. For the long-range plan, see [PLAN.md](../PLAN.md).
 
 ## The big picture
@@ -32,14 +32,16 @@ Everything runs inside the dev container (`.devcontainer/Dockerfile`: Rust
 
 | Crate | Role | Key types |
 |-------|------|-----------|
+| `frontier-ebcdic` (lib `ebcdic`) | IBM-037/1047 code pages; packed, zoned, binary, hex-float codecs; exact `Decimal` | `CodePage`, `Encoding`, `Decimal`, `packed`/`zoned`/`binary` |
+| `frontier-copybook` | Copybook → layout; decode to JSON / flat fields; JSON Schema; transcoding | `parse`, `Item`, `decode`, `flatten`, `json_schema`, `transcode` |
 | `frontier-sort` | DFSORT subset over fixed-length records | `parse_control`, `run`, `SortSpec` |
 | `frontier-jcl` | JCL parser, catalog, job executor, system utilities | `parse_job`, `System`, `Catalog`, `JobRecord` |
-| `frontier-adapter` | The contract every higher layer uses | `MainframeAdapter`, `LocalAdapter` |
-| `frontier-cli` | The `frontier` binary: build, seed, submit, inspect | clap subcommands |
+| `frontier-adapter` | The contract every higher layer uses, plus the dataset→copybook registry | `MainframeAdapter`, `LocalAdapter`, `LayoutRegistry` |
+| `frontier-cli` | The `frontier` binary: build, seed, submit, inspect, decode | clap subcommands |
 
-Dependency direction: `cli → adapter → jcl → sort`. Nothing depends on the
-CLI, so the Phase 3 API server will sit beside it as another adapter
-consumer.
+Dependency direction: `cli → adapter → {jcl → sort, copybook → ebcdic}`.
+Nothing depends on the CLI, so the Phase 3 API server will sit beside it as
+another adapter consumer.
 
 ## Life of a job
 
@@ -190,10 +192,99 @@ S9(7)V9(6) 29-35, CREDITED PD S9(7)V99 36-40.
 first 50 bytes in display form, then BALANCE `SIGN LEADING SEPARATE` at
 51-64, INT-RATE at 65-69 and OD-LIMIT at 70-78.
 
-The authoritative definitions are the copybooks in `cobol/copybooks/`. The
-Phase 2 `copybook` crate will parse them so that tables like these, and
-field decoding in `frontier ds print`, are generated rather than
-hand-written.
+The authoritative definitions are the copybooks in `cobol/copybooks/`, and
+`frontier copybook <NAME>` prints the same information generated from
+them.
+
+## Reading data: copybooks and encodings
+
+### From copybook to layout
+
+`frontier_copybook::parse` works in four passes:
+
+1. **Source lines.** Fixed format uses columns 8-72; comments are `*` or `/`
+   in column 7, or `*>` anywhere. A `-` in column 7 continues a literal.
+   `REPLACING` pairs are applied, or, when none are given, `:TAG:` prefixes
+   are stripped (`:AR:-BALANCE` → `BALANCE`).
+2. **Tokens and entries.** Each sentence (ending in a period) is one data
+   description: level, name or FILLER, then clauses in any order. Level-88
+   entries attach to the entry before them.
+3. **Tree.** Level numbers nest items. A copybook that starts below 01 is
+   wrapped in a synthetic 01 named after the file. Group `USAGE` and `SIGN`
+   clauses are inherited by the elementary items under them.
+4. **Layout.** Elementary sizes come from PICTURE and USAGE:
+   - DISPLAY: the picture length, plus one for `SEPARATE`
+   - COMP-3: digits/2+1
+   - COMP/COMP-5: 2, 4 or 8 bytes
+   - COMP-1/COMP-2: 4 or 8 bytes
+
+   Offsets accumulate, `REDEFINES` reuses the target's offset, and an
+   `OCCURS` item takes `size × max` bytes. `OCCURS DEPENDING ON` is only
+   allowed as the last item, so fixed offsets never depend on data.
+
+Offsets are absolute and 0-based internally; listings show 1-based `POS`
+to match DFSORT and compiler maps.
+
+### Decoding
+
+`decode(record, bytes, &DecodeOptions)` walks the layout into a `Node`
+tree (groups, arrays and leaves). Each leaf keeps its offset, raw bytes, and
+either a value or the reason the bytes are invalid. The same tree feeds all
+of these:
+
+- `to_json()`: COBOL names as keys, in layout order. Decimals with a scale
+  are strings (`"4969.00"`), so money never passes through an IEEE double.
+  Integers up to 2^53 are numbers. Invalid fields are `null`. FILLER and
+  REDEFINES views are omitted unless requested.
+- `flatten()`: elementary fields with path, position, type, value, and the
+  88-level names that are true. This backs `ds print --format fields|table`
+  and `ds check`.
+- `OCCURS DEPENDING ON` counts come from counter fields already decoded
+  earlier in the same record.
+
+`json_schema(record)` describes the same JSON (draft 2020-12). Decimals are
+string patterns and integers have min/max bounds. Every property carries an
+`x-cobol` block (level, offset, length, type, usage, 88-levels, and
+occurs/dependingOn on arrays), which is what the Phase 6 gateway needs to
+map JSON back to bytes.
+
+### Encodings
+
+| | `Encoding::Local` (GnuCOBOL here) | `Encoding::Ebcdic(cp)` (z/OS) |
+|---|---|---|
+| Text | ISO-8859-1 | IBM-037 / IBM-1047 |
+| Zoned sign | negative `d` → `0x70+d` (`p`..`y`); positive plain | zone nibble `C`/`F` positive, `D` negative |
+| COMP / BINARY | big-endian | big-endian |
+| COMP-5 | little-endian (native) | big-endian |
+| COMP-1/2 | IEEE 754 | IBM hexadecimal float |
+
+These facts were measured from bytes GnuCOBOL 3.2 wrote, not assumed; the
+probe values are the codec unit tests. The code-page tables are generated
+from glibc `iconv` (`scripts/gen-codepages.sh`), and a test asserts that
+037 and 1047 differ in exactly six positions.
+
+`transcode` converts records field by field:
+- text and FILLER are translated
+- zoned decimals are decoded and re-encoded, because the sign conventions
+  differ
+- COMP-3 and COMP are copied unchanged
+- COMP-5 bytes are swapped when the platforms' byte orders differ
+
+A zoned field holding invalid data is translated as text and reported.
+REDEFINES views are ignored during conversion (the original definition
+wins), and COMP-1/2 are copied without conversion and counted.
+
+Verified against independent references:
+- `ds export` of the all-DISPLAY feed is byte-identical to glibc `iconv`.
+- The packed master round-trips through IBM-037 byte-for-byte.
+- Decoded ledger and posting totals equal GLRECON's to the cent.
+
+### The registry
+
+`cobol/datasets.toml` maps dataset-name patterns to copybooks (and
+optionally a record). `LayoutRegistry` lives in `frontier-adapter`, so the
+CLI now, and later the API and MCP server, resolve layouts the same way. A
+bare pattern like `FFB.ACCTMAST` covers every generation.
 
 ## Design decisions
 
@@ -205,14 +296,15 @@ hand-written.
 | Utilities built into the runner | SORT/IDCAMS/IEBGENER have no GnuCOBOL equivalents, and owning them lets later phases instrument them |
 | Messages use real IBM message IDs (`IEF142I`, `IDC0001I`, `ICE054I`) | People who know z/OS can read the output unchanged. Product names are never claimed; the sort identifies itself as "FRONTIER SORT" |
 | One `MainframeAdapter` trait | The API, UI and MCP server must work unchanged against Hercules or real z/OS later |
-| ASCII data for now | GnuCOBOL's native mode. EBCDIC conversion is Phase 2 |
+| ASCII data inside the shop, EBCDIC at the boundary | GnuCOBOL's native mode keeps the batch simple. Export, import and decode produce and consume true z/OS byte layouts where files cross platforms |
+| Decimals as JSON strings | Exactness beats convenience for money: `S9(15)V99` does not fit an IEEE double |
+| Invalid data decodes to an error, not a guess | A value that would S0C7 on z/OS should be visible (`ds check`, `null` in JSON), never silently turned into a number |
 
 ## Extension points for later phases
 
-- **Phase 2:** `crates/ebcdic`, `crates/copybook`, and field-level decoding
-  in `ds print`.
 - **Phase 3:** `crates/frontier-api` (axum) as a second adapter consumer,
-  plus the Next.js Control Room reading `job.json` and the spool.
+  serving `job.json`, spool and decoded records (`LayoutRegistry` +
+  `decode(...).to_json()`), plus the Next.js Control Room.
 - **Phase 4:** step records already carry CPU, elapsed time and record
   counts. Emitting them as OTel spans and SMF-30-style records is additive.
 - **Phase 5:** the executor already keeps passed temporaries and GDG

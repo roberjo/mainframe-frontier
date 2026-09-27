@@ -16,7 +16,7 @@ else
 IN :=
 endif
 
-.PHONY: help image shell rust cobol build test lint seed setup nightly demo jobs reset
+.PHONY: help image shell rust cobol build test lint seed setup nightly demo verify jobs reset
 
 help: ## Show targets
 	@grep -E '^[a-z]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -54,6 +54,9 @@ demo: reset setup ## Fresh system, SETUP, then two nightly cycles (the second is
 	$(MAKE) --no-print-directory nightly BUSDATE=$(DAY2)
 	$(IN) frontier jobs
 	$(IN) frontier ds list
+
+verify: ## Check every field of the cycle's outputs against their copybooks
+	$(IN) sh -c 'for d in "FFB.ACCTMAST(0)" "FFB.ACCTMAST(-1)" "FFB.DAILY.POSTLOG(0)" "FFB.DAILY.INTLOG(0)"; do frontier ds check "$$d" || exit 1; done'
 
 jobs: ## List jobs on the spool
 	$(IN) frontier jobs

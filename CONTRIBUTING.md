@@ -22,9 +22,10 @@ and runs directly when started from `make shell`.
 | Changed | Run |
 |---------|-----|
 | Rust | `make test` then `make lint` (rustfmt + clippy `-D warnings`) |
-| A COBOL program or copybook | `make cobol` then `make nightly BUSDATE=20260929` |
+| A COBOL program or copybook | `make cobol` then `make nightly BUSDATE=20260929`, then `frontier copybook NAME` to confirm the layout |
+| A new dataset | Map it to its copybook in `cobol/datasets.toml` so `ds print` / `ds check` can decode it |
 | JCL | `frontier submit cobol/jcl/NIGHTLY.jcl --set BUSDATE=...` |
-| Anything, before a PR | `make demo`; it must end with both NIGHTLY jobs at `CC 0004` and GLRECON `IN BALANCE` |
+| Anything, before a PR | `make demo && make verify`: both NIGHTLY jobs at `CC 0004`, GLRECON `IN BALANCE`, and every output field valid |
 
 Look at results with `frontier jobs`, `frontier job <id>`,
 `frontier spool <id> [DD|ALL]`, and `frontier ds print <dsn> --hex`.

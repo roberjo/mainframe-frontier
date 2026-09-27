@@ -1,5 +1,7 @@
 //! Viewing records: raw, hex, and copybook-driven field, table and JSON views.
 
+use std::io::{BufWriter, Write};
+
 use anyhow::Result;
 use clap::ValueEnum;
 use frontier_adapter::layouts::Layout;
@@ -51,6 +53,8 @@ fn printable(bytes: &[u8], enc: Encoding) -> String {
 }
 
 pub fn print(v: &View) -> Result<()> {
+    // One buffered writer: record listings can be tens of thousands of lines.
+    let mut out = BufWriter::new(std::io::stdout().lock());
     let format = v.format.unwrap_or(if v.layout.is_some() {
         Format::Table
     } else {
@@ -83,52 +87,56 @@ pub fn print(v: &View) -> Result<()> {
         let using = layout
             .map(|l| format!("  LAYOUT={} {}", l.name(), l.record().display_name()))
             .unwrap_or_default();
-        println!(
+        writeln!(
+            out,
             "{}  LRECL={}  RECORDS={total}  ENCODING={}{using}",
             v.title, v.lrecl, v.encoding
-        );
+        )?;
         if let Some(l) = layout
             && l.record().total_size() != v.lrecl
         {
-            println!(
+            writeln!(
+                out,
                 "  WARNING: layout length {} differs from LRECL {}",
                 l.record().total_size(),
                 v.lrecl
-            );
+            )?;
         }
     }
 
     match format {
         Format::Raw => {
             for (i, rec) in records {
-                println!("{:>8} {}", i + 1, printable(rec, v.encoding));
+                writeln!(out, "{:>8} {}", i + 1, printable(rec, v.encoding))?;
             }
         }
         Format::Hex => {
             for (i, rec) in records {
-                println!("{:>8}", i + 1);
+                writeln!(out, "{:>8}", i + 1)?;
                 for (off, chunk) in rec.chunks(32).enumerate() {
                     let h: Vec<String> = chunk
                         .chunks(4)
                         .map(|w| w.iter().map(|b| format!("{b:02X}")).collect())
                         .collect();
-                    println!(
+                    writeln!(
+                        out,
                         "  +{:04} {:<72} |{}|",
                         off * 32,
                         h.join(" "),
                         printable(chunk, v.encoding)
-                    );
+                    )?;
                 }
             }
         }
         Format::Fields => {
             let layout = layout.unwrap();
             for (i, rec) in records {
-                println!("\nRECORD {} OF {total}", i + 1);
-                println!(
+                writeln!(out, "\nRECORD {} OF {total}", i + 1)?;
+                writeln!(
+                    out,
                     "  {:>5} {:>4}  {:<30} {:<24} VALUE",
                     "POS", "LEN", "FIELD", "TYPE"
-                );
+                )?;
                 let fields = select(flatten(&decode(layout.record(), rec, &opts)), &v.fields);
                 for f in fields {
                     let name = format!(
@@ -140,13 +148,14 @@ pub fn print(v: &View) -> Result<()> {
                         Ok(s) => format!("{s}{}", conds(&f)),
                         Err(e) => format!("*** INVALID: {e}"),
                     };
-                    println!(
+                    writeln!(
+                        out,
                         "  {:>5} {:>4}  {:<30} {:<24} {value}",
                         f.offset + 1,
                         f.len,
                         name,
                         f.type_label
-                    );
+                    )?;
                 }
             }
         }
@@ -161,7 +170,7 @@ pub fn print(v: &View) -> Result<()> {
                 })
                 .collect();
             let Some((_, first)) = rows.first() else {
-                return Ok(());
+                return Ok(out.flush()?);
             };
             let headers: Vec<&str> = first.iter().map(|f| f.path.as_str()).collect();
             let cell = |f: &FlatField| match &f.value {
@@ -181,13 +190,19 @@ pub fn print(v: &View) -> Result<()> {
                     .collect::<Vec<_>>()
                     .join("  ")
             };
-            println!(
+            writeln!(
+                out,
                 "{:>8}  {}",
                 "REC",
                 line(headers.iter().map(|h| h.to_string()).collect())
-            );
+            )?;
             for (i, row) in &rows {
-                println!("{:>8}  {}", i + 1, line(row.iter().map(cell).collect()));
+                writeln!(
+                    out,
+                    "{:>8}  {}",
+                    i + 1,
+                    line(row.iter().map(cell).collect())
+                )?;
             }
         }
         Format::Json => {
@@ -195,18 +210,20 @@ pub fn print(v: &View) -> Result<()> {
             let all: Vec<serde_json::Value> = records
                 .map(|(_, rec)| decode(layout.record(), rec, &opts).to_json())
                 .collect();
-            println!("{}", serde_json::to_string_pretty(&all)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&all)?)?;
         }
         Format::Jsonl => {
             let layout = layout.unwrap();
             for (_, rec) in records {
-                println!(
+                writeln!(
+                    out,
                     "{}",
                     serde_json::to_string(&decode(layout.record(), rec, &opts).to_json())?
-                );
+                )?;
             }
         }
     }
+    out.flush()?;
     Ok(())
 }
 

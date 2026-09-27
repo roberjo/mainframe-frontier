@@ -27,6 +27,8 @@ jobs:
         run: docker compose build
       - name: Compile, SETUP, two nightly cycles (month-end included)
         run: docker compose run --rm frontier make demo ACCOUNTS=2000 TXNS=10000
+      - name: Validate every output field against its copybook
+        run: docker compose run --rm frontier make verify
       - name: Upload job spool
         if: always()
         uses: actions/upload-artifact@v4

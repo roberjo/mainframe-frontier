@@ -137,7 +137,7 @@ fixed/variable record formats, 1M+ generated accounts for performance demos.
 |-------|-------------|---------|--------|
 | 0 | Repo skeleton, devcontainer, compose, CI | `make demo` works | **Done** |
 | 1 | COBOL workload + GnuCOBOL + JCL-lite runner | Nightly batch runs locally end-to-end | **Done** |
-| 2 | `ebcdic` + `copybook` packages, dataset decoder | Records readable in the UI and API | |
+| 2 | `ebcdic` + `copybook` packages, dataset decoder | Records readable in the UI and API | **Done**: plus `ds check`, EBCDIC export/import, JSON Schema |
 | 3 | Control-plane API + Control Room UI (DAG, spool, datasets) | Visual demo | |
 | 4 | OTel/SMF telemetry + Grafana dashboards + SLOs | Monitoring story | |
 | 5 | Checkpoint/restart, chaos scenarios, runbooks | Reliability story | |

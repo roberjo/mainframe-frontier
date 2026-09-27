@@ -37,8 +37,8 @@ copybook-driven API gateway, and an MCP server so AI agents can operate it.
 |-------|-------|--------|
 | 0 | Repo, dev container, Compose, CI | ✅ Done |
 | 1 | COBOL workload, GnuCOBOL, JCL-lite runner, SORT/IDCAMS/IEBGENER | ✅ Done |
-| 2 | EBCDIC codecs, copybook parser, field-level dataset decoding | Next |
-| 3 | REST/WebSocket API and Control Room web UI | Planned |
+| 2 | EBCDIC codecs, copybook parser, field-level decoding, data-quality checks, EBCDIC export/import | ✅ Done |
+| 3 | REST/WebSocket API and Control Room web UI | Next |
 | 4 | OpenTelemetry / SMF-style telemetry, Grafana, batch-window SLOs | Planned |
 | 5 | Checkpoint/restart, chaos (abend injection), runbooks | Planned |
 | 6 | Copybook → OpenAPI gateway, CDC events, lineage and impact analysis | Planned |
@@ -117,18 +117,51 @@ GDG BASE                                     LIMIT   GENS  CURRENT (0)
 FFB.ACCTMAST                                     7      3  FFB.ACCTMAST.G0003V00
 ```
 
-**Packed decimal, byte by byte.** Balance `00 00 00 04 96 90 0C` is +4,969.00:
+**Read the data through its copybook.** `cobol/datasets.toml` maps each
+dataset to the copybook that describes it, so records decode field by field.
+Packed decimal, 88-levels and all:
 
 ```
-$ frontier ds print 'FFB.ACCTMAST(0)' --limit 1 --hex
-  +0032 20202020 20202020 53413230 30333032 32310000 00049690 0C00215F 00000000  |        SA20030221........!_....|
+$ frontier ds print 'FFB.ACCTMAST(0)' --limit 3 --fields ACCT-ID,CUST-NAME,ACCT-TYPE,BALANCE,INT-RATE,ACCR-INT
+     REC  ACCT-ID     CUST-NAME             ACCT-TYPE  BALANCE   INT-RATE  ACCR-INT
+       1  4000000001  SUSAN B. JACKSON      S          4969.00   0.0215    -0.000598
+       2  4000000002  MICHAEL Y. THOMAS     C          2898.81   0.0000    0.000000
+       3  4000000003  ELIZABETH K. SANCHEZ  C          10606.15  0.0000    0.000000
+
+$ frontier copybook ACCTREC            # the layout map: every field's position and length
+05      BALANCE                          S9(11)V99 COMP-3               51      7
+05      INT-RATE                         9V9(04) COMP-3                 58      3
+
+$ frontier ds print 'FFB.ACCTMAST(0)' --format jsonl | head -1   # JSON for tools
+{"ACCT-ID":"4000000001","CUST-NAME":"SUSAN B. JACKSON","ACCT-TYPE":"S","STATUS":"A","OPEN-DATE":20030221,"BALANCE":"4969.00",...}
 ```
 
-**Break it on purpose.** Corrupt a packed field and watch the runner
-report a real S0C7 (Phase 5 turns this into a proper chaos tool):
+Other formats are `--format fields` (one field per line, with 88-level
+names), `table`, `json`, `raw` and `hex`. `frontier copybook ACCTREC --schema`
+prints a JSON Schema. Decoded balances summed in Python match GLRECON's
+closing ledger to the cent.
+
+**Ship it to a mainframe, and back.** Export converts field by field:
+text and zoned decimals go to EBCDIC, while packed and binary fields are
+kept as-is, which a plain code-page conversion would corrupt. The result
+can be sent to z/OS as a binary FTP transfer, and host files can be read
+directly:
+
+```
+$ frontier ds export 'FFB.ACCTMAST(0)' acct.ebcdic --encoding 037
+$ frontier decode acct.ebcdic --layout ACCTREC --limit 2     # read an EBCDIC host file
+$ frontier ds import acct.ebcdic FFB.RESTORED.ACCTMAST --layout ACCTREC
+```
+
+**Break it on purpose.** Corrupt a packed field. `ds check` finds it
+before the batch does, and then the runner reports a real S0C7 (Phase 5
+turns this into a proper chaos tool):
 
 ```
 $ printf 'ZZZZZZZ' | dd of=var/datasets/FFB.ACCTMAST.G0003V00 bs=1 seek=4150 conv=notrunc
+$ frontier ds check 'FFB.ACCTMAST(0)'
+  1 invalid fields in 1 records
+  record      42  BALANCE   pos   51 len   7  S9(11)V99 COMP-3   invalid digit at byte 0 (hex 5A5A5A5A5A5A5A)
 $ frontier seed feed --date 20261001 --count 5000
 $ frontier submit cobol/jcl/NIGHTLY.jcl --set BUSDATE=20261001
 JOB00004 NIGHTLY  ABEND S0C7
@@ -186,6 +219,27 @@ Not supported yet (these are rejected with a clear JCL error): PROCs,
 `IF/THEN/ELSE`, DD concatenation, VSAM, and restart. See
 [PLAN.md](PLAN.md) for when each arrives.
 
+## What the data tools understand
+
+- **Copybooks:**
+  - fixed or free format, with sequence and identification areas, comments,
+    literal continuation and `:TAG:` replacing
+  - levels 01-49, 77 and 88 (`VALUE`, `THRU`)
+  - `PIC` categories, including `S`, `V` and `P` scaling, and edited pictures
+  - `USAGE` DISPLAY, COMP/COMP-4/BINARY, COMP-5, COMP-3, COMP-1/COMP-2,
+    INDEX, POINTER
+  - `SIGN LEADING/TRAILING [SEPARATE]`, `OCCURS`, `OCCURS DEPENDING ON`
+    (at the end of a record), `REDEFINES`, and group `USAGE` inheritance
+- **Encodings:**
+  - IBM-037 and IBM-1047, with tables generated from glibc `iconv`
+  - zoned signs in both GnuCOBOL (`0x70+d`) and z/OS (`C`/`D` zone) form
+  - COMP-5 byte order per platform
+  - IBM hex float
+- **JSON:** COBOL names as keys, in layout order. Decimals are strings
+  (`"4969.00"`) so no precision is lost, integers are numbers, and invalid
+  fields are `null`. `ds check` reports each invalid field with its position
+  and hex.
+
 ## Repository layout
 
 ```
@@ -193,12 +247,16 @@ cobol/
   src/          ACCTLOAD ACCTPOST GLRECON INTCALC STMTGEN TRNVALID
   copybooks/    record layouts (ACCTREC, TRANFEED, TRANREC, POSTREC, INTREC, ...)
   jcl/          SETUP.jcl  NIGHTLY.jcl
+  datasets.toml which copybook describes which dataset
 crates/
+  ebcdic/       IBM-037/1047 code pages; packed, zoned, binary, hex-float codecs
+  copybook/     copybook parser, layouts, decoding, JSON Schema, EBCDIC transcoding
   sort/         DFSORT-compatible sort engine
   jcl/          JCL parser, catalog and GDGs, JES executor, IDCAMS/IEBGENER/IEFBR14
-  adapter/      MainframeAdapter trait + LocalAdapter (future: Hercules, z/OS)
+  adapter/      MainframeAdapter trait + LocalAdapter, dataset layout registry
   frontier-cli/ the `frontier` command
 docs/           ARCHITECTURE.md
+scripts/        gen-codepages.sh (regenerates the code-page tables from iconv)
 .devcontainer/  dev image (Rust 1.97 slim + GnuCOBOL 3.2) and VS Code config
 .github/        CI: fmt, clippy, tests, full batch run with spool artifact
 var/            runtime state (gitignored): datasets/ catalog.json loadlib/ spool/
@@ -216,11 +274,18 @@ frontier jobs [--json]                        spool listing
 frontier job ID [--json]                      steps + every DD with disposition and record count
 frontier spool ID [DDNAME|ALL]                list or print spool files
 frontier ds list [PATTERN]                    catalog (FFB, FFB.DAILY.*, FFB.**)
-frontier ds print DSN [--hex] [--skip N] [--limit N]
+frontier ds print DSN [--format raw|hex|fields|table|json|jsonl] [--fields A,B]
+                      [--layout COPYBOOK] [--skip N] [--limit N] [--redefines]
+frontier ds check DSN [--layout COPYBOOK]     validate every field (exit 4 on bad data)
+frontier ds export DSN FILE [--encoding 037|1047]
+frontier ds import FILE DSN [--encoding 037|1047] [--layout COPYBOOK] [--replace]
+frontier copybook NAME [--schema|--json]      layout map, JSON Schema, or parsed layout
+frontier decode FILE --layout COPYBOOK [--encoding 037|1047|local] [view options]
 ```
 
 `submit` exits non-zero on an abend or JCL error, or when `--max-rc` is
-exceeded, so it can gate scripts and CI.
+exceeded; `ds check` exits 4 when it finds invalid data. Both can gate
+scripts and CI (`make verify` runs `ds check` over the cycle's outputs).
 
 ## Emulated vs. real
 
@@ -229,8 +294,9 @@ for Enterprise COBOL is PARM handling: these programs use
 `ACCEPT ... FROM COMMAND-LINE` where z/OS passes a LINKAGE SECTION
 parameter. The runner, catalog and utilities are faithful emulations of a
 documented subset, and they use real z/OS message IDs so the output reads
-naturally to mainframe people. Data is currently ASCII; EBCDIC arrives in
-Phase 2.
+naturally to mainframe people. The batch runs on ASCII data because that is
+GnuCOBOL's native mode. EBCDIC appears at the boundary: `ds export`,
+`ds import` and `decode` produce and read real z/OS byte layouts.
 
 ## License
 

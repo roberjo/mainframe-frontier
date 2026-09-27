@@ -28,12 +28,25 @@ fn item_schema(item: &Item) -> Value {
                 continue;
             }
             let child = match &c.occurs {
-                Some(o) => json!({
-                    "type": "array",
-                    "items": item_schema(c),
-                    "minItems": if o.depending_on.is_some() { o.min } else { o.max },
-                    "maxItems": o.max,
-                }),
+                Some(o) => {
+                    // The OCCURS metadata describes the array, so x-cobol moves up to it.
+                    let mut items = item_schema(c);
+                    let mut ext = items
+                        .as_object_mut()
+                        .and_then(|m| m.remove("x-cobol"))
+                        .unwrap_or_else(|| json!({}));
+                    ext["occurs"] = json!({ "min": o.min, "max": o.max });
+                    if let Some(d) = &o.depending_on {
+                        ext["dependingOn"] = json!(d);
+                    }
+                    json!({
+                        "type": "array",
+                        "items": items,
+                        "minItems": if o.depending_on.is_some() { o.min } else { o.max },
+                        "maxItems": o.max,
+                        "x-cobol": ext,
+                    })
+                }
                 None => item_schema(c),
             };
             props.insert(c.display_name().to_string(), child);
@@ -50,11 +63,6 @@ fn item_schema(item: &Item) -> Value {
     if !item.is_group() {
         ext.insert("type".into(), json!(item.type_label()));
         ext.insert("usage".into(), json!(item.usage.label()));
-    }
-    if let Some(o) = &item.occurs
-        && let Some(d) = &o.depending_on
-    {
-        ext.insert("dependingOn".into(), json!(d));
     }
     if !item.conditions.is_empty() {
         let conds: Map<String, Value> = item
