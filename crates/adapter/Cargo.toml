@@ -1,0 +1,10 @@
+[package]
+name = "frontier-adapter"
+description = "MainframeAdapter: one contract for jobs, spool and datasets across local, Hercules and z/OS backends"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+frontier-jcl.workspace = true

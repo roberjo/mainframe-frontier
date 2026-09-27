@@ -1,0 +1,28 @@
+{
+  "name": "Mainframe Frontier",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "frontier",
+  "workspaceFolder": "/workspace",
+  "overrideCommand": true,
+  "remoteEnv": {
+    "FRONTIER_HOME": "/workspace/var"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "BroadcomMFD.cobol-language-support",
+        "bitlang.cobol",
+        "tamasfe.even-better-toml"
+      ],
+      "settings": {
+        "cobol-lsp.cpy-manager.paths-local": ["cobol/copybooks"],
+        "files.associations": {
+          "*.cpy": "cobol",
+          "*.jcl": "jcl"
+        },
+        "editor.rulers": [7, 12, 72]
+      }
+    }
+  }
+}

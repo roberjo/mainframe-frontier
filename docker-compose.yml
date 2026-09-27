@@ -1,0 +1,16 @@
+# `docker compose up` runs the full demo: build, seed, SETUP, two nightly cycles.
+# `docker compose run --rm frontier bash` gives a shell with cobc + cargo.
+services:
+  frontier:
+    build: .devcontainer
+    image: mainframe-frontier-dev
+    working_dir: /workspace
+    command: make demo
+    volumes:
+      - .:/workspace
+      - cargo-target:/cargo-target
+      - cargo-registry:/usr/local/cargo/registry
+
+volumes:
+  cargo-target:
+  cargo-registry:

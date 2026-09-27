@@ -1,0 +1,14 @@
+[package]
+name = "frontier-jcl"
+description = "JCL-lite parser and a JES-style job executor with catalog, GDGs, spool and system utilities"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+frontier-sort.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true

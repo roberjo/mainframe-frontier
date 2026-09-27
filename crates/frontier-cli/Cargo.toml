@@ -1,0 +1,18 @@
+[package]
+name = "frontier-cli"
+description = "The `frontier` command: build COBOL, seed data, submit jobs, read spool and datasets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "frontier"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+frontier-adapter.workspace = true
+frontier-jcl.workspace = true
+libc.workspace = true
+serde_json.workspace = true
