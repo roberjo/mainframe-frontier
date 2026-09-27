@@ -1,0 +1,33 @@
+# Which copybook describes which dataset.
+#
+# Tools (`frontier ds print`, `ds check`, `ds export`, and later the API and
+# Control Room) use this to decode records field by field. Patterns use z/OS
+# dataset-name rules: a bare name also matches everything below it, so
+# "FFB.ACCTMAST" covers every generation FFB.ACCTMAST.GnnnnV00.
+#
+#   copybook  file name in cobol/copybooks (without .cpy)
+#   record    level-01 name, when the copybook has more than one (optional)
+
+[[dataset]]
+pattern = "FFB.ACCTMAST"
+copybook = "ACCTREC"
+
+[[dataset]]
+pattern = "FFB.SEED.ACCTLOAD"
+copybook = "ACCTLOAD"
+
+[[dataset]]
+pattern = "FFB.DAILY.TRANFEED"
+copybook = "TRANFEED"
+
+[[dataset]]
+pattern = "FFB.HIST.TRANFEED"
+copybook = "TRANFEED"
+
+[[dataset]]
+pattern = "FFB.DAILY.POSTLOG"
+copybook = "POSTREC"
+
+[[dataset]]
+pattern = "FFB.DAILY.INTLOG"
+copybook = "INTREC"

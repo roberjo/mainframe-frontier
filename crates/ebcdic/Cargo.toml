@@ -1,0 +1,9 @@
+[package]
+name = "frontier-ebcdic"
+description = "EBCDIC code pages (IBM-037, IBM-1047) and COBOL numeric codecs: packed, zoned, binary, hex float"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "ebcdic"

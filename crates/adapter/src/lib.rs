@@ -5,6 +5,8 @@
 //! jobs run on the local GnuCOBOL substrate, an emulated MVS (Hercules), or
 //! real z/OS through z/OSMF. Only the local backend exists today.
 
+pub mod layouts;
+
 use std::collections::BTreeMap;
 
 use anyhow::Result;

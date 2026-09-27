@@ -1,0 +1,11 @@
+[package]
+name = "frontier-copybook"
+description = "COBOL copybook parser: byte-exact layouts, record decoding to JSON, JSON Schema, ASCII/EBCDIC transcoding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+frontier-ebcdic.workspace = true
+serde.workspace = true
+serde_json.workspace = true

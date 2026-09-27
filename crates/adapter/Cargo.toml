@@ -7,4 +7,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+frontier-copybook.workspace = true
 frontier-jcl.workspace = true
+serde.workspace = true
+toml.workspace = true

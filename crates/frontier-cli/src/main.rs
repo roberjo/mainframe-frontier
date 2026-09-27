@@ -1,4 +1,5 @@
 mod compile;
+mod records;
 mod seed;
 
 use std::collections::BTreeMap;
@@ -7,8 +8,11 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use frontier_adapter::layouts::{Layout, LayoutRegistry};
 use frontier_adapter::{JobRecord, JobStatus, LocalAdapter, MainframeAdapter, StepOutcome};
+use frontier_copybook::{Encoding, TranscodeReport, json_schema, transcode};
 use frontier_jcl::System;
+use records::{Format, View, parse_encoding};
 
 #[derive(Parser)]
 #[command(
@@ -20,6 +24,14 @@ struct Cli {
     /// System home (datasets, catalog, spool, loadlib)
     #[arg(long, global = true, env = "FRONTIER_HOME", default_value = "var")]
     home: PathBuf,
+
+    /// Copybook directory
+    #[arg(long, global = true, default_value = "cobol/copybooks")]
+    copybooks: PathBuf,
+
+    /// Dataset → copybook registry
+    #[arg(long, global = true, default_value = "cobol/datasets.toml")]
+    layouts: PathBuf,
 
     #[command(subcommand)]
     cmd: Cmd,
@@ -71,6 +83,52 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DsCmd,
     },
+    /// Show a copybook's layout (offsets, lengths, 88-levels) or its JSON Schema
+    Copybook {
+        /// Name in the copybook directory (ACCTREC) or a path
+        name: String,
+        /// Level-01 record for --schema (default: the first)
+        #[arg(long)]
+        record: Option<String>,
+        /// Print JSON Schema instead of the listing
+        #[arg(long)]
+        schema: bool,
+        /// Print the parsed layout as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Decode a host file (e.g. downloaded from z/OS in binary) with a copybook
+    Decode {
+        file: PathBuf,
+        #[arg(long)]
+        layout: String,
+        #[arg(long)]
+        record: Option<String>,
+        /// local, 037 or 1047
+        #[arg(long, default_value = "037", value_parser = parse_encoding)]
+        encoding: Encoding,
+        /// Record length (default: the layout length)
+        #[arg(long)]
+        lrecl: Option<usize>,
+        #[command(flatten)]
+        view: ViewArgs,
+    },
+}
+
+#[derive(clap::Args)]
+struct ViewArgs {
+    #[arg(long, value_enum)]
+    format: Option<Format>,
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+    #[arg(long, default_value_t = 0)]
+    skip: usize,
+    /// Only these fields, comma-separated (names or paths)
+    #[arg(long, value_delimiter = ',')]
+    fields: Option<Vec<String>>,
+    /// Include REDEFINES views
+    #[arg(long)]
+    redefines: bool,
 }
 
 #[derive(Subcommand)]
@@ -101,16 +159,58 @@ enum SeedCmd {
 enum DsCmd {
     /// List cataloged datasets (pattern: FFB, FFB.DAILY.*, FFB.**)
     List { pattern: Option<String> },
-    /// Print records; accepts relative GDG names like FFB.ACCTMAST(0)
+    /// Print records, decoded with the dataset's copybook; accepts FFB.ACCTMAST(0)
     Print {
         dsn: String,
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
-        #[arg(long, default_value_t = 0)]
-        skip: usize,
-        /// Hex dump instead of characters
+        /// Copybook to use instead of the registered one
+        #[arg(long)]
+        layout: Option<String>,
+        #[arg(long)]
+        record: Option<String>,
+        /// Shorthand for --format hex
         #[arg(long)]
         hex: bool,
+        #[command(flatten)]
+        view: ViewArgs,
+    },
+    /// Validate every field of every record against the copybook (finds S0C7 data)
+    Check {
+        dsn: String,
+        #[arg(long)]
+        layout: Option<String>,
+        #[arg(long)]
+        record: Option<String>,
+        /// How many problems to list
+        #[arg(long, default_value_t = 20)]
+        show: usize,
+    },
+    /// Write a dataset as an EBCDIC host file, converting field by field
+    Export {
+        dsn: String,
+        file: PathBuf,
+        #[arg(long, default_value = "037", value_parser = parse_encoding)]
+        encoding: Encoding,
+        #[arg(long)]
+        layout: Option<String>,
+        #[arg(long)]
+        record: Option<String>,
+    },
+    /// Catalog an EBCDIC host file as a local dataset, converting field by field
+    Import {
+        file: PathBuf,
+        dsn: String,
+        #[arg(long, default_value = "037", value_parser = parse_encoding)]
+        encoding: Encoding,
+        #[arg(long)]
+        layout: Option<String>,
+        #[arg(long)]
+        record: Option<String>,
+        /// Record length (default: the layout length)
+        #[arg(long)]
+        lrecl: Option<usize>,
+        /// Replace the dataset if it exists
+        #[arg(long)]
+        replace: bool,
     },
 }
 
@@ -139,6 +239,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let system = System::open(&cli.home)?;
     let adapter = LocalAdapter::new(system);
     let sys = adapter.system();
+    let registry = LayoutRegistry::load(&cli.layouts, &cli.copybooks)?;
+    // An explicit --layout wins; otherwise the registry entry for the dataset.
+    let layout_for =
+        |dsn: &str, explicit: &Option<String>, record: &Option<String>| -> Result<Option<Layout>> {
+            match explicit {
+                Some(name) => registry.load_layout(name, record.as_deref()).map(Some),
+                None => registry.for_dsn(dsn),
+            }
+        };
 
     match cli.cmd {
         Cmd::Build {
@@ -320,67 +429,227 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             DsCmd::Print {
                 dsn,
-                limit,
-                skip,
+                layout,
+                record,
                 hex,
+                view,
             } => {
-                let (entry, data) = adapter.read_dataset(&dsn)?;
+                let name = sys.resolve_dsn(&dsn)?;
+                let (entry, data) = adapter.read_dataset(&name)?;
                 let lrecl = match entry.lrecl {
                     Some(l) if entry.is_fixed() => l as usize,
                     _ => {
                         // Line-oriented or unknown: print as text.
                         for line in String::from_utf8_lossy(&data)
                             .lines()
-                            .skip(skip)
-                            .take(limit)
+                            .skip(view.skip)
+                            .take(view.limit)
                         {
                             println!("{line}");
                         }
                         return Ok(ExitCode::SUCCESS);
                     }
                 };
+                let layout = layout_for(&name, &layout, &record)?;
+                records::print(&View {
+                    title: format!("{name}  RECFM={}", entry.recfm),
+                    data: &data,
+                    lrecl,
+                    layout: layout.as_ref(),
+                    encoding: Encoding::Local,
+                    skip: view.skip,
+                    limit: view.limit,
+                    format: if hex { Some(Format::Hex) } else { view.format },
+                    fields: view.fields,
+                    redefines: view.redefines,
+                })?;
+            }
+            DsCmd::Check {
+                dsn,
+                layout,
+                record,
+                show,
+            } => {
+                let name = sys.resolve_dsn(&dsn)?;
+                let (entry, data) = adapter.read_dataset(&name)?;
+                let layout = layout_for(&name, &layout, &record)?.with_context(|| {
+                    format!(
+                        "no layout for {name}: pass --layout or map it in {}",
+                        cli.layouts.display()
+                    )
+                })?;
+                let lrecl = entry
+                    .lrecl
+                    .map_or(layout.record().total_size(), |l| l as usize);
+                let r = records::check(&layout, &data, lrecl, Encoding::Local, show);
                 println!(
-                    "{} RECFM={} LRECL={lrecl} RECORDS={}",
-                    sys.resolve_dsn(&dsn)?,
-                    entry.recfm,
-                    data.len() / lrecl
+                    "{name}: {} records checked against {} {} ({lrecl} bytes)",
+                    r.records,
+                    layout.name(),
+                    layout.record().display_name()
                 );
-                for (i, rec) in data.chunks(lrecl).enumerate().skip(skip).take(limit) {
-                    if hex {
-                        println!("{:>8}", i + 1);
-                        for (off, chunk) in rec.chunks(32).enumerate() {
-                            let h: Vec<String> = chunk
-                                .chunks(4)
-                                .map(|w| w.iter().map(|b| format!("{b:02X}")).collect())
-                                .collect();
-                            println!(
-                                "  +{:04} {:<72} |{}|",
-                                off * 32,
-                                h.join(" "),
-                                printable(chunk)
-                            );
-                        }
-                    } else {
-                        println!("{:>8} {}", i + 1, printable(rec));
-                    }
+                if r.bad_fields == 0 {
+                    println!("  all fields valid");
+                    return Ok(ExitCode::SUCCESS);
                 }
+                println!(
+                    "  {} invalid fields in {} records",
+                    r.bad_fields, r.bad_records
+                );
+                for (field, n) in &r.by_field {
+                    println!("    {field:<30} {n:>8}");
+                }
+                println!();
+                for e in &r.examples {
+                    println!("  {e}");
+                }
+                return Ok(ExitCode::from(4));
+            }
+            DsCmd::Export {
+                dsn,
+                file,
+                encoding,
+                layout,
+                record,
+            } => {
+                let name = sys.resolve_dsn(&dsn)?;
+                let (entry, data) = adapter.read_dataset(&name)?;
+                let layout = layout_for(&name, &layout, &record)?.with_context(|| {
+                    format!("no layout for {name}: export converts field by field and needs one")
+                })?;
+                let lrecl = entry
+                    .lrecl
+                    .map_or(layout.record().total_size(), |l| l as usize);
+                let mut report = TranscodeReport::default();
+                let out = transcode(
+                    layout.record(),
+                    &data,
+                    lrecl,
+                    Encoding::Local,
+                    encoding,
+                    &mut report,
+                )
+                .map_err(anyhow::Error::msg)?;
+                std::fs::write(&file, &out)?;
+                println!(
+                    "{name} -> {}: {} records, LRECL {lrecl}, {encoding}",
+                    file.display(),
+                    report.records
+                );
+                return Ok(transcode_summary(&report));
+            }
+            DsCmd::Import {
+                file,
+                dsn,
+                encoding,
+                layout,
+                record,
+                lrecl,
+                replace,
+            } => {
+                if dsn.contains('(') {
+                    anyhow::bail!("import to a plain dataset name, not a GDG generation");
+                }
+                let dsn = dsn.to_uppercase();
+                if !replace && sys.catalog()?.datasets.contains_key(&dsn) {
+                    anyhow::bail!("{dsn} already exists (use --replace)");
+                }
+                let layout = layout_for(&dsn, &layout, &record)?
+                    .with_context(|| format!("no layout for {dsn}: pass --layout"))?;
+                let lrecl = lrecl.unwrap_or(layout.record().total_size());
+                let data =
+                    std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+                let mut report = TranscodeReport::default();
+                let out = transcode(
+                    layout.record(),
+                    &data,
+                    lrecl,
+                    encoding,
+                    Encoding::Local,
+                    &mut report,
+                )
+                .map_err(anyhow::Error::msg)?;
+                sys.write_dataset(&dsn, "FB", Some(lrecl as u32), &out, "IMPORT")?;
+                println!(
+                    "{} -> {dsn}: {} records, LRECL {lrecl}, from {encoding}",
+                    file.display(),
+                    report.records
+                );
+                return Ok(transcode_summary(&report));
             }
         },
+        Cmd::Copybook {
+            name,
+            record,
+            schema,
+            json,
+        } => {
+            let layout = registry.load_layout(&name, record.as_deref())?;
+            if schema {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json_schema(layout.record()))?
+                );
+            } else if json {
+                println!("{}", serde_json::to_string_pretty(&layout.copybook)?);
+            } else {
+                print!("{}", layout.copybook.listing());
+            }
+        }
+        Cmd::Decode {
+            file,
+            layout,
+            record,
+            encoding,
+            lrecl,
+            view,
+        } => {
+            let layout = registry.load_layout(&layout, record.as_deref())?;
+            let data =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let lrecl = lrecl.unwrap_or(layout.record().total_size());
+            if lrecl == 0 || !data.len().is_multiple_of(lrecl) {
+                anyhow::bail!(
+                    "{} is {} bytes, not a multiple of LRECL {lrecl}",
+                    file.display(),
+                    data.len()
+                );
+            }
+            records::print(&View {
+                title: file.display().to_string(),
+                data: &data,
+                lrecl,
+                layout: Some(&layout),
+                encoding,
+                skip: view.skip,
+                limit: view.limit,
+                format: view.format,
+                fields: view.fields,
+                redefines: view.redefines,
+            })?;
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
 
-fn printable(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|&b| {
-            if (0x20..0x7f).contains(&b) {
-                b as char
-            } else {
-                '.'
-            }
-        })
-        .collect()
+fn transcode_summary(report: &TranscodeReport) -> ExitCode {
+    if report.floats_unconverted > 0 {
+        println!(
+            "  note: {} COMP-1/COMP-2 fields copied without float conversion",
+            report.floats_unconverted
+        );
+    }
+    if report.invalid_numeric == 0 {
+        return ExitCode::SUCCESS;
+    }
+    println!(
+        "  {} zoned fields were not valid numbers and were translated as text:",
+        report.invalid_numeric
+    );
+    for p in &report.problems {
+        println!("    {p}");
+    }
+    ExitCode::from(4)
 }
 
 fn print_job(job: &JobRecord) {

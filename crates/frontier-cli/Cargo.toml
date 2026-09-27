@@ -13,6 +13,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 frontier-adapter.workspace = true
+frontier-copybook.workspace = true
 frontier-jcl.workspace = true
 libc.workspace = true
 serde_json.workspace = true

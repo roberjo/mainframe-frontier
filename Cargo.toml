@@ -13,8 +13,11 @@ anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
 libc = "0.2"
+toml = "0.8"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 frontier-sort = { path = "crates/sort" }
+frontier-ebcdic = { path = "crates/ebcdic" }
+frontier-copybook = { path = "crates/copybook" }
 frontier-jcl = { path = "crates/jcl" }
 frontier-adapter = { path = "crates/adapter" }
