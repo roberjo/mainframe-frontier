@@ -1,0 +1,54 @@
+version: 2
+
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Skip releases younger than 5 days; compromised versions are usually yanked by then.
+    # Security updates ignore cooldown.
+    cooldown:
+      default-days: 5
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "docker"
+    directory: "/.devcontainer"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Skip releases younger than 5 days; compromised versions are usually yanked by then.
+    # Security updates ignore cooldown.
+    cooldown:
+      default-days: 5
+    groups:
+      docker-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Skip releases younger than 5 days; compromised versions are usually yanked by then.
+    # Security updates ignore cooldown.
+    cooldown:
+      default-days: 5
+    groups:
+      docker-compose-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Skip releases younger than 5 days; compromised versions are usually yanked by then.
+    # Security updates ignore cooldown.
+    cooldown:
+      default-days: 5
+    groups:
+      github-actions-minor-patch:
+        update-types: ["minor", "patch"]
