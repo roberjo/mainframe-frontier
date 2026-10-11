@@ -2,7 +2,7 @@
 # (Node 24 for the Control Room and MCP server is added in Phase 3.)
 # Used by the devcontainer, docker compose, and CI so every environment
 # compiles and runs the COBOL workload identically.
-FROM rust:1.97-slim-trixie
+FROM rust:1.98-slim-trixie
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gnucobol3 make jq \
