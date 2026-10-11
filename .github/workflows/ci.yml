@@ -9,7 +9,7 @@ jobs:
     name: Rust (fmt, clippy, tests)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -22,7 +22,7 @@ jobs:
     name: COBOL build + nightly batch
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build dev image (Rust + GnuCOBOL 3.2)
         run: docker compose build
       - name: Compile, SETUP, two nightly cycles (month-end included)
